@@ -200,11 +200,121 @@
 
   ::-webkit-scrollbar{width:6px;}
   ::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px;}
+
+  .menu-btn{
+    font-size:18px;
+    background:transparent;
+  }
+
+  .sidebar-overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.5);
+    z-index:40;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .25s ease;
+  }
+  .sidebar-overlay.open{
+    opacity:1;
+    pointer-events:auto;
+  }
+
+  .sidebar{
+    position:fixed;
+    top:0; bottom:0; left:0;
+    width:82%;
+    max-width:320px;
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    z-index:50;
+    transform:translateX(-100%);
+    transition:transform .25s ease;
+    padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);
+    overflow-y:auto;
+    display:flex;
+    flex-direction:column;
+  }
+  .sidebar.open{ transform:translateX(0); }
+
+  .sidebar-section{
+    padding:16px;
+    border-bottom:1px solid var(--line);
+  }
+  .sidebar-section h3{
+    margin:0 0 8px;
+    font-size:13px;
+    color:var(--muted);
+    text-transform:none;
+  }
+  .sidebar-hint{
+    font-size:11.5px;
+    color:var(--muted);
+    margin:0 0 10px;
+    line-height:1.4;
+  }
+
+  .new-chat-btn{
+    width:100%;
+    padding:10px;
+    border-radius:12px;
+    border:1px solid var(--accent-dim);
+    background:var(--panel-2);
+    color:var(--accent);
+    font-size:14px;
+    margin-bottom:10px;
+  }
+
+  .chat-item{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:10px 8px;
+    border-radius:10px;
+    font-size:13.5px;
+    margin-bottom:4px;
+  }
+  .chat-item.active{ background:var(--panel-2); }
+  .chat-item .chat-title{
+    flex:1;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  .chat-item .chat-del{
+    color:var(--muted);
+    font-size:15px;
+    padding:2px 6px;
+  }
+
+  .memory-item{
+    display:flex;
+    align-items:flex-start;
+    gap:8px;
+    padding:8px;
+    border-radius:10px;
+    background:var(--panel-2);
+    font-size:13px;
+    margin-bottom:6px;
+    line-height:1.4;
+  }
+  .memory-item .memory-text{ flex:1; }
+  .memory-item .memory-del{
+    color:var(--muted);
+    font-size:15px;
+    flex-shrink:0;
+  }
+  .memory-empty{
+    color:var(--muted);
+    font-size:12.5px;
+    font-style:italic;
+  }
 </style>
 </head>
 <body>
 
 <header>
+  <button class="round menu-btn" id="menuBtn" title="Чати та пам'ять">☰</button>
   <div class="holo" id="holo">
     <div class="ring ring-outer"></div>
     <div class="ring ring-mid"></div>
@@ -216,6 +326,19 @@
   </div>
   <select id="voiceSelect" title="Голос П'ятниці"></select>
 </header>
+
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-section">
+    <button class="new-chat-btn" id="newChatBtn">+ Новий чат</button>
+    <div id="chatList"></div>
+  </div>
+  <div class="sidebar-section">
+    <h3>Пам'ять</h3>
+    <p class="sidebar-hint">Скажи "П'ятниця, запам'ятай ..." — і це діятиме в усіх чатах</p>
+    <div id="memoryList"></div>
+  </div>
+</aside>
 
 <main id="chat"></main>
 
@@ -232,10 +355,11 @@ const ENDPOINT = "https://pyatnytsia-proxy-bc33.kaminskijoleksij2.workers.dev";
 
 const WAKE_WORDS = ["п'ятниц", "пятниц", "п’ятниц"];
 
-const SYSTEM_PROMPT = `Ти — П'ятниця, персональний ШІ-асистент українця на ім'я Олексій.
+const SYSTEM_PROMPT_BASE = `Ти — П'ятниця, персональний ШІ-асистент українця на ім'я Олексій.
 Говори виключно українською мовою, у жіночому граматичному роді (як асистентка), природно і по-людськи, без зайвої формальності.
 Відповідай стисло й по суті, як голосовий асистент — без markdown-розмітки, без списків, без зірочок. Кілька речень, максимум.
-Якщо питання потребує розгорнутої відповіді — можеш відповісти довше, але без "води".`;
+Якщо питання потребує розгорнутої відповіді — можеш відповісти довше, але без "води".
+Якщо користувач просить щось запам'ятати ("запам'ятай...") — коротко підтверди, що зберегла це, природною фразою.`;
 
 const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('input');
@@ -245,9 +369,208 @@ const orb = document.getElementById('holo');
 const voiceSelect = document.getElementById('voiceSelect');
 const statusLine = document.getElementById('statusLine');
 const hint = document.getElementById('hint');
+const menuBtn = document.getElementById('menuBtn');
+const sidebar = document.getElementById('sidebar');
+const sidebarOverlay = document.getElementById('sidebarOverlay');
+const newChatBtn = document.getElementById('newChatBtn');
+const chatListEl = document.getElementById('chatList');
+const memoryListEl = document.getElementById('memoryList');
 
 let history = [];
 let lastCoords = null; // { lat, lon, ts }
+let activeChatId = null;
+
+// ---- Локальне сховище: чати ----
+function loadJSON(key, fallback){
+  try{
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  }catch(_e){ return fallback; }
+}
+function saveJSON(key, value){
+  try{ localStorage.setItem(key, JSON.stringify(value)); }catch(_e){}
+}
+
+function getChats(){ return loadJSON('friday_chats', []); }
+function saveChats(chats){ saveJSON('friday_chats', chats); }
+
+function getChatHistory(id){ return loadJSON('friday_chat_' + id, []); }
+function saveChatHistory(id, hist){ saveJSON('friday_chat_' + id, hist); }
+
+function createChat(){
+  const id = 'c' + Date.now();
+  const chats = getChats();
+  chats.unshift({ id, title: 'Новий чат' });
+  saveChats(chats);
+  saveChatHistory(id, []);
+  return id;
+}
+
+function deleteChat(id){
+  let chats = getChats().filter(c => c.id !== id);
+  localStorage.removeItem('friday_chat_' + id);
+  saveChats(chats);
+  if(activeChatId === id){
+    if(chats.length){
+      switchChat(chats[0].id);
+    }else{
+      switchChat(createChat());
+    }
+  }else{
+    renderChatList();
+  }
+}
+
+function renameChat(id, title){
+  const chats = getChats();
+  const chat = chats.find(c => c.id === id);
+  if(chat){
+    chat.title = title.slice(0, 40);
+    saveChats(chats);
+  }
+}
+
+function switchChat(id){
+  activeChatId = id;
+  saveJSON('friday_active_chat', id);
+  history = getChatHistory(id);
+  renderChatFromHistory();
+  renderChatList();
+  closeSidebar();
+}
+
+function renderChatFromHistory(){
+  chatEl.innerHTML = '';
+  if(history.length === 0){
+    addSystem('П\'ятниця готова. Натисни мікрофон для голосового режиму або просто пиши.');
+    return;
+  }
+  history.forEach(turn => {
+    const text = (turn.parts || []).map(p => p.text || '').join('');
+    addMsg(turn.role === 'user' ? 'user' : 'model', text);
+  });
+}
+
+function renderChatList(){
+  const chats = getChats();
+  chatListEl.innerHTML = '';
+  chats.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'chat-item' + (c.id === activeChatId ? ' active' : '');
+    const title = document.createElement('div');
+    title.className = 'chat-title';
+    title.textContent = c.title || 'Чат';
+    title.addEventListener('click', () => switchChat(c.id));
+    const del = document.createElement('div');
+    del.className = 'chat-del';
+    del.textContent = '✕';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteChat(c.id);
+    });
+    row.appendChild(title);
+    row.appendChild(del);
+    chatListEl.appendChild(row);
+  });
+}
+
+function initChats(){
+  let chats = getChats();
+  if(chats.length === 0){
+    const id = createChat();
+    chats = getChats();
+    activeChatId = id;
+  }else{
+    activeChatId = loadJSON('friday_active_chat', chats[0].id);
+    if(!chats.some(c => c.id === activeChatId)) activeChatId = chats[0].id;
+  }
+  history = getChatHistory(activeChatId);
+  renderChatFromHistory();
+  renderChatList();
+}
+
+function persistCurrentChat(){
+  saveChatHistory(activeChatId, history);
+  const chats = getChats();
+  const chat = chats.find(c => c.id === activeChatId);
+  if(chat && chat.title === 'Новий чат'){
+    const firstUserTurn = history.find(t => t.role === 'user');
+    if(firstUserTurn){
+      const text = (firstUserTurn.parts || []).map(p => p.text || '').join('');
+      renameChat(activeChatId, text);
+      renderChatList();
+    }
+  }
+}
+
+// ---- Постійна пам'ять (діє в усіх чатах) ----
+function getMemory(){ return loadJSON('friday_memory', []); }
+function saveMemory(list){ saveJSON('friday_memory', list); }
+
+function addMemory(fact){
+  const list = getMemory();
+  list.push(fact.trim());
+  saveMemory(list);
+  renderMemoryList();
+}
+
+function removeMemory(index){
+  const list = getMemory();
+  list.splice(index, 1);
+  saveMemory(list);
+  renderMemoryList();
+}
+
+function renderMemoryList(){
+  const list = getMemory();
+  memoryListEl.innerHTML = '';
+  if(list.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'memory-empty';
+    empty.textContent = 'Поки нічого не збережено';
+    memoryListEl.appendChild(empty);
+    return;
+  }
+  list.forEach((fact, i) => {
+    const row = document.createElement('div');
+    row.className = 'memory-item';
+    const text = document.createElement('div');
+    text.className = 'memory-text';
+    text.textContent = fact;
+    const del = document.createElement('div');
+    del.className = 'memory-del';
+    del.textContent = '✕';
+    del.addEventListener('click', () => removeMemory(i));
+    row.appendChild(text);
+    row.appendChild(del);
+    memoryListEl.appendChild(row);
+  });
+}
+
+function buildSystemPrompt(){
+  const memory = getMemory();
+  if(memory.length === 0) return SYSTEM_PROMPT_BASE;
+  const memoryBlock = memory.map(f => '- ' + f).join('\n');
+  return SYSTEM_PROMPT_BASE + `\n\nОсь що ти вже знаєш про Олексія з попередніх розмов (враховуй це природно, не перераховуй список вголос):\n${memoryBlock}`;
+}
+
+function extractRememberRequest(text){
+  const match = text.match(/запам['’ʼ]?ятай(?:,)?\s+(.+)/i);
+  return match ? match[1].trim() : null;
+}
+
+// ---- Бічна панель ----
+function openSidebar(){
+  sidebar.classList.add('open');
+  sidebarOverlay.classList.add('open');
+}
+function closeSidebar(){
+  sidebar.classList.remove('open');
+  sidebarOverlay.classList.remove('open');
+}
+menuBtn.addEventListener('click', openSidebar);
+sidebarOverlay.addEventListener('click', closeSidebar);
+newChatBtn.addEventListener('click', () => switchChat(createChat()));
 
 // ---- Етап 2: локація й погода ----
 const WEATHER_KEYWORDS = ["погод", "температ", "холодно", "тепло на вулиц", "дощ", "сніг"];
@@ -354,9 +677,10 @@ function isRetryableError(message){
 
 async function askGemini(userText){
   history.push({ role: "user", parts: [{ text: userText }] });
+  persistCurrentChat();
 
   const body = {
-    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    system_instruction: { parts: [{ text: buildSystemPrompt() }] },
     contents: history
   };
 
@@ -385,6 +709,7 @@ async function askGemini(userText){
       const reply = data?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "Не отримала відповіді.";
       thinkingDiv.textContent = reply;
       history.push({ role: "model", parts: [{ text: reply }] });
+      persistCurrentChat();
       speak(reply);
       return;
     }catch(err){
@@ -401,6 +726,12 @@ async function askGemini(userText){
 
 async function handleUserMessage(text){
   addMsg('user', text);
+
+  const rememberFact = extractRememberRequest(text);
+  if(rememberFact){
+    addMemory(rememberFact);
+  }
+
   const context = await buildContext(text);
   const apiText = context
     ? `[Актуальні дані]\n${context}\n\n[Повідомлення користувача]\n${text}`
@@ -608,7 +939,8 @@ micBtn.addEventListener('touchstart', () => {
 micBtn.addEventListener('touchend', () => clearTimeout(pressTimer));
 
 setupRecognition();
-addSystem('П\'ятниця готова. Натисни мікрофон для голосового режиму або просто пиши.');
+initChats();
+renderMemoryList();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
