@@ -692,7 +692,7 @@ function extractRememberRequest(text){
 }
 
 function extractImageRequest(text){
-  const match = text.match(/(?:намалюй|згенеруй\s+(?:зображення|картинку|фото)|створи\s+(?:зображення|картинку))\s*[:,]?\s*(.+)/i);
+  const match = text.match(/(?:намалюй|створи|згенеруй)\s+(?:мені\s+)?(?:зображення|картинку|фото)?\s*[:,]?\s*(.+)/i);
   return match ? match[1].trim() : null;
 }
 
