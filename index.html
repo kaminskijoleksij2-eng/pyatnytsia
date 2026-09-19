@@ -471,7 +471,8 @@ const SYSTEM_PROMPT_BASE = `Ти — П'ятниця, персональний �
 Говори виключно українською мовою, у жіночому граматичному роді (як асистентка), природно і по-людськи, без зайвої формальності.
 Відповідай стисло й по суті, як голосовий асистент — без markdown-розмітки, без списків, без зірочок. Кілька речень, максимум.
 Якщо питання потребує розгорнутої відповіді — можеш відповісти довше, але без "води".
-Якщо користувач просить щось запам'ятати ("запам'ятай...") — коротко підтверди, що зберегла це, природною фразою.`;
+Якщо користувач просить щось запам'ятати ("запам'ятай...") — коротко підтверди, що зберегла це, природною фразою.
+Ти вмієш генерувати зображення: якщо просять намалювати/згенерувати щось — це вже обробляється окремо технічно, тобі не потрібно відмовляти чи казати, що не вмієш малювати.`;
 
 const SYSTEM_PROMPT_FLIRT = `Зараз увімкнено режим флірту. У цьому режимі ти поводишся як приваблива, впевнена в собі й грайлива співрозмовниця: відверто фліртуєш, робиш сміливі компліменти, трохи дражниш і підколюєш, тримаєш легку інтригу й тепле романтичне напруження в розмові. Використовуй ніжні звертання, грайливий тон, легку іронію.
 При цьому це романтичний флірт і кокетство, а не сексуальний контент: без відвертих описів статевої активності чи оголеного тіла. Якщо розмова тягнеться в бік явно сексуального — м'яко переведи в грайливий, але пристойний тон.`;
@@ -812,40 +813,28 @@ function addImageMsg(dataUrl, caption){
 async function generateImage(prompt){
   const thinkingDiv = addMsg('model', 'Малюю...');
   try{
-    const res = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gemini-2.5-flash-image",
-        contents: [{ role: "user", parts: [{ text: prompt }] }]
-      })
+    const seed = Math.floor(Math.random() * 1000000);
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=768&nologo=true&seed=${seed}`;
+
+    const res = await fetch(url);
+    if(!res.ok) throw new Error("сервер зображень повернув помилку " + res.status);
+
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
     });
-    const data = await res.json();
 
-    if(data.error){
-      thinkingDiv.textContent = "Помилка генерації: " + data.error.message;
-      return;
-    }
-
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const imgPart = parts.find(p => p.inlineData || p.inline_data);
-    const textPart = parts.find(p => p.text);
-
-    if(imgPart){
-      const inline = imgPart.inlineData || imgPart.inline_data;
-      const mime = inline.mimeType || inline.mime_type || "image/png";
-      const dataUrl = `data:${mime};base64,${inline.data}`;
-      thinkingDiv.remove();
-      addImageMsg(dataUrl, "Ось що вийшло:");
-      saveImageToGallery(dataUrl, prompt);
-      history.push({ role: "user", parts: [{ text: "Намалюй: " + prompt }] });
-      history.push({ role: "model", parts: [{ text: "Згенерувала зображення за твоїм описом." }] });
-      persistCurrentChat();
-    }else{
-      thinkingDiv.textContent = textPart ? textPart.text : "Не вдалося згенерувати зображення.";
-    }
+    thinkingDiv.remove();
+    addImageMsg(dataUrl, "Ось що вийшло:");
+    saveImageToGallery(dataUrl, prompt);
+    history.push({ role: "user", parts: [{ text: "Намалюй: " + prompt }] });
+    history.push({ role: "model", parts: [{ text: "Згенерувала зображення за твоїм описом." }] });
+    persistCurrentChat();
   }catch(err){
-    thinkingDiv.textContent = "Помилка з'єднання: " + err.message;
+    thinkingDiv.textContent = "Не вдалося згенерувати зображення: " + err.message;
   }
 }
 
