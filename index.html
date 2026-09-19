@@ -309,6 +309,100 @@
     font-size:12.5px;
     font-style:italic;
   }
+
+  .toggle-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    font-size:14px;
+    cursor:pointer;
+  }
+  .toggle-row input{ display:none; }
+  .toggle-track{
+    width:42px; height:24px;
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    border-radius:99px;
+    position:relative;
+    flex-shrink:0;
+    transition:background .2s ease;
+  }
+  .toggle-thumb{
+    position:absolute;
+    top:2px; left:2px;
+    width:18px; height:18px;
+    border-radius:50%;
+    background:var(--muted);
+    transition:transform .2s ease, background .2s ease;
+  }
+  .toggle-row input:checked + .toggle-track{ background:var(--accent-dim); }
+  .toggle-row input:checked + .toggle-track .toggle-thumb{
+    transform:translateX(18px);
+    background:var(--accent);
+  }
+
+  .gallery-grid{
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:6px;
+  }
+  .gallery-item{
+    position:relative;
+    aspect-ratio:1;
+    border-radius:8px;
+    overflow:hidden;
+    background:var(--panel-2);
+  }
+  .gallery-item img{
+    width:100%; height:100%;
+    object-fit:cover;
+    display:block;
+  }
+  .gallery-item .gallery-del{
+    position:absolute;
+    top:2px; right:2px;
+    width:18px; height:18px;
+    border-radius:50%;
+    background:rgba(0,0,0,.6);
+    color:#fff;
+    font-size:11px;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  .msg-image{
+    max-width:100%;
+    border-radius:12px;
+    display:block;
+    margin-top:6px;
+  }
+
+  .lightbox{
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.9);
+    z-index:60;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+  .lightbox.open{ display:flex; }
+  .lightbox img{
+    max-width:100%;
+    max-height:100%;
+    border-radius:8px;
+  }
+  .lightbox-close{
+    position:absolute;
+    top:env(safe-area-inset-top,16px);
+    right:16px;
+    width:36px; height:36px;
+    border-radius:50%;
+    background:var(--panel);
+    color:var(--text);
+    border:1px solid var(--line);
+    font-size:16px;
+  }
 </style>
 </head>
 <body>
@@ -334,11 +428,29 @@
     <div id="chatList"></div>
   </div>
   <div class="sidebar-section">
+    <h3>Режим спілкування</h3>
+    <label class="toggle-row">
+      <span>💕 Режим флірту</span>
+      <input type="checkbox" id="flirtToggle">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="sidebar-section">
     <h3>Пам'ять</h3>
     <p class="sidebar-hint">Скажи "П'ятниця, запам'ятай ..." — і це діятиме в усіх чатах</p>
     <div id="memoryList"></div>
   </div>
+  <div class="sidebar-section">
+    <h3>Галерея</h3>
+    <p class="sidebar-hint">Скажи "П'ятниця, намалюй ..." — зображення збережуться тут</p>
+    <div id="galleryGrid" class="gallery-grid"></div>
+  </div>
 </aside>
+
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightboxClose">✕</button>
+  <img id="lightboxImg" src="" alt="">
+</div>
 
 <main id="chat"></main>
 
@@ -361,6 +473,9 @@ const SYSTEM_PROMPT_BASE = `Ти — П'ятниця, персональний �
 Якщо питання потребує розгорнутої відповіді — можеш відповісти довше, але без "води".
 Якщо користувач просить щось запам'ятати ("запам'ятай...") — коротко підтверди, що зберегла це, природною фразою.`;
 
+const SYSTEM_PROMPT_FLIRT = `Зараз увімкнено режим флірту. У цьому режимі ти поводишся як приваблива, впевнена в собі й грайлива співрозмовниця: відверто фліртуєш, робиш сміливі компліменти, трохи дражниш і підколюєш, тримаєш легку інтригу й тепле романтичне напруження в розмові. Використовуй ніжні звертання, грайливий тон, легку іронію.
+При цьому це романтичний флірт і кокетство, а не сексуальний контент: без відвертих описів статевої активності чи оголеного тіла. Якщо розмова тягнеться в бік явно сексуального — м'яко переведи в грайливий, але пристойний тон.`;
+
 const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
@@ -375,6 +490,11 @@ const sidebarOverlay = document.getElementById('sidebarOverlay');
 const newChatBtn = document.getElementById('newChatBtn');
 const chatListEl = document.getElementById('chatList');
 const memoryListEl = document.getElementById('memoryList');
+const flirtToggle = document.getElementById('flirtToggle');
+const galleryGrid = document.getElementById('galleryGrid');
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightboxImg');
+const lightboxClose = document.getElementById('lightboxClose');
 
 let history = [];
 let lastCoords = null; // { lat, lon, ts }
@@ -548,15 +668,185 @@ function renderMemoryList(){
 }
 
 function buildSystemPrompt(){
+  let prompt = SYSTEM_PROMPT_BASE;
+  if(getFlirtMode()){
+    prompt += "\n\n" + SYSTEM_PROMPT_FLIRT;
+  }
   const memory = getMemory();
-  if(memory.length === 0) return SYSTEM_PROMPT_BASE;
-  const memoryBlock = memory.map(f => '- ' + f).join('\n');
-  return SYSTEM_PROMPT_BASE + `\n\nОсь що ти вже знаєш про Олексія з попередніх розмов (враховуй це природно, не перераховуй список вголос):\n${memoryBlock}`;
+  if(memory.length){
+    const memoryBlock = memory.map(f => '- ' + f).join('\n');
+    prompt += `\n\nОсь що ти вже знаєш про Олексія з попередніх розмов (враховуй це природно, не перераховуй список вголос):\n${memoryBlock}`;
+  }
+  return prompt;
 }
+
+function getFlirtMode(){ return loadJSON('friday_flirt_mode', false); }
+function setFlirtMode(val){ saveJSON('friday_flirt_mode', val); }
+
+flirtToggle.checked = getFlirtMode();
+flirtToggle.addEventListener('change', () => setFlirtMode(flirtToggle.checked));
 
 function extractRememberRequest(text){
   const match = text.match(/запам['’ʼ]?ятай(?:,)?\s+(.+)/i);
   return match ? match[1].trim() : null;
+}
+
+function extractImageRequest(text){
+  const match = text.match(/(?:намалюй|згенеруй\s+(?:зображення|картинку|фото)|створи\s+(?:зображення|картинку))\s*[:,]?\s*(.+)/i);
+  return match ? match[1].trim() : null;
+}
+
+// ---- Галерея зображень (IndexedDB) ----
+const GALLERY_DB = 'friday_gallery_db';
+const GALLERY_STORE = 'images';
+
+function openGalleryDB(){
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(GALLERY_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if(!db.objectStoreNames.contains(GALLERY_STORE)){
+        db.createObjectStore(GALLERY_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveImageToGallery(dataUrl, prompt){
+  try{
+    const db = await openGalleryDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(GALLERY_STORE, 'readwrite');
+      tx.objectStore(GALLERY_STORE).put({ id: 'img' + Date.now(), dataUrl, prompt, ts: Date.now() });
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    renderGallery();
+  }catch(_e){}
+}
+
+async function getGalleryImages(){
+  try{
+    const db = await openGalleryDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(GALLERY_STORE, 'readonly');
+      const req = tx.objectStore(GALLERY_STORE).getAll();
+      req.onsuccess = () => resolve(req.result.sort((a,b) => b.ts - a.ts));
+      req.onerror = () => reject(req.error);
+    });
+  }catch(_e){ return []; }
+}
+
+async function deleteGalleryImage(id){
+  try{
+    const db = await openGalleryDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(GALLERY_STORE, 'readwrite');
+      tx.objectStore(GALLERY_STORE).delete(id);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    renderGallery();
+  }catch(_e){}
+}
+
+async function renderGallery(){
+  const images = await getGalleryImages();
+  galleryGrid.innerHTML = '';
+  if(images.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'memory-empty';
+    empty.textContent = 'Поки порожньо';
+    galleryGrid.appendChild(empty);
+    return;
+  }
+  images.forEach(img => {
+    const item = document.createElement('div');
+    item.className = 'gallery-item';
+    const thumb = document.createElement('img');
+    thumb.src = img.dataUrl;
+    thumb.addEventListener('click', () => openLightbox(img.dataUrl));
+    const del = document.createElement('div');
+    del.className = 'gallery-del';
+    del.textContent = '✕';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteGalleryImage(img.id);
+    });
+    item.appendChild(thumb);
+    item.appendChild(del);
+    galleryGrid.appendChild(item);
+  });
+}
+
+function openLightbox(dataUrl){
+  lightboxImg.src = dataUrl;
+  lightbox.classList.add('open');
+}
+function closeLightbox(){
+  lightbox.classList.remove('open');
+  lightboxImg.src = '';
+}
+lightboxClose.addEventListener('click', closeLightbox);
+lightbox.addEventListener('click', (e) => { if(e.target === lightbox) closeLightbox(); });
+
+function addImageMsg(dataUrl, caption){
+  const div = document.createElement('div');
+  div.className = 'msg model';
+  if(caption){
+    const cap = document.createElement('div');
+    cap.textContent = caption;
+    div.appendChild(cap);
+  }
+  const img = document.createElement('img');
+  img.className = 'msg-image';
+  img.src = dataUrl;
+  img.addEventListener('click', () => openLightbox(dataUrl));
+  div.appendChild(img);
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+async function generateImage(prompt){
+  const thinkingDiv = addMsg('model', 'Малюю...');
+  try{
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemini-2.5-flash-image",
+        contents: [{ role: "user", parts: [{ text: prompt }] }]
+      })
+    });
+    const data = await res.json();
+
+    if(data.error){
+      thinkingDiv.textContent = "Помилка генерації: " + data.error.message;
+      return;
+    }
+
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const imgPart = parts.find(p => p.inlineData || p.inline_data);
+    const textPart = parts.find(p => p.text);
+
+    if(imgPart){
+      const inline = imgPart.inlineData || imgPart.inline_data;
+      const mime = inline.mimeType || inline.mime_type || "image/png";
+      const dataUrl = `data:${mime};base64,${inline.data}`;
+      thinkingDiv.remove();
+      addImageMsg(dataUrl, "Ось що вийшло:");
+      saveImageToGallery(dataUrl, prompt);
+      history.push({ role: "user", parts: [{ text: "Намалюй: " + prompt }] });
+      history.push({ role: "model", parts: [{ text: "Згенерувала зображення за твоїм описом." }] });
+      persistCurrentChat();
+    }else{
+      thinkingDiv.textContent = textPart ? textPart.text : "Не вдалося згенерувати зображення.";
+    }
+  }catch(err){
+    thinkingDiv.textContent = "Помилка з'єднання: " + err.message;
+  }
 }
 
 // ---- Бічна панель ----
@@ -726,6 +1016,12 @@ async function askGemini(userText){
 
 async function handleUserMessage(text){
   addMsg('user', text);
+
+  const imagePrompt = extractImageRequest(text);
+  if(imagePrompt){
+    generateImage(imagePrompt);
+    return;
+  }
 
   const rememberFact = extractRememberRequest(text);
   if(rememberFact){
@@ -941,6 +1237,7 @@ micBtn.addEventListener('touchend', () => clearTimeout(pressTimer));
 setupRecognition();
 initChats();
 renderMemoryList();
+renderGallery();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
