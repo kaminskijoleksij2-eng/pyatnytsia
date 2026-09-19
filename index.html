@@ -951,7 +951,12 @@ function sleep(ms){
 }
 
 function isRetryableError(message){
-  return /high demand|overloaded|unavailable|503|internal error|deadline/i.test(message || "");
+  return /high demand|overloaded|unavailable|503|internal error|deadline|quota|rate limit|429/i.test(message || "");
+}
+
+function extractRetryDelayMs(message){
+  const match = (message || "").match(/retry in\s+([\d.]+)s/i);
+  return match ? Math.ceil(parseFloat(match[1]) * 1000) + 500 : null;
 }
 
 async function askGemini(userText){
@@ -977,8 +982,11 @@ async function askGemini(userText){
 
       if (data.error) {
         if(isRetryableError(data.error.message) && attempt < maxAttempts){
-          thinkingDiv.textContent = `Сервер перевантажений, пробую ще раз... (${attempt}/${maxAttempts})`;
-          await sleep(1200 * attempt);
+          const suggestedDelay = extractRetryDelayMs(data.error.message);
+          const delay = suggestedDelay || (1200 * attempt);
+          const secs = Math.ceil(delay / 1000);
+          thinkingDiv.textContent = `Ліміт запитів, чекаю ${secs} с і пробую ще раз... (${attempt}/${maxAttempts})`;
+          await sleep(delay);
           continue;
         }
         thinkingDiv.textContent = "Помилка API: " + data.error.message;
