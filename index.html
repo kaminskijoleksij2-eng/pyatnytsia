@@ -247,6 +247,27 @@
     color:var(--muted);
     text-transform:none;
   }
+  .sidebar-section h3.collapsible{
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    user-select:none;
+  }
+  .sidebar-section h3.collapsible::after{
+    content:'▾';
+    font-size:11px;
+    transition:transform .2s ease;
+    margin-left:8px;
+  }
+  .sidebar-section.collapsed h3.collapsible::after{
+    transform:rotate(-90deg);
+  }
+  .sidebar-section.collapsed .sidebar-hint,
+  .sidebar-section.collapsed #memoryList,
+  .sidebar-section.collapsed #galleryGrid{
+    display:none;
+  }
   .sidebar-hint{
     font-size:11.5px;
     color:var(--muted);
@@ -404,6 +425,7 @@
     font-size:16px;
   }
 </style>
+<script src="https://js.puter.com/v2/"></script>
 </head>
 <body>
 
@@ -435,13 +457,13 @@
       <span class="toggle-track"><span class="toggle-thumb"></span></span>
     </label>
   </div>
-  <div class="sidebar-section">
-    <h3>Пам'ять</h3>
+  <div class="sidebar-section collapsed" id="memorySection">
+    <h3 class="collapsible" id="memoryToggle">Пам'ять</h3>
     <p class="sidebar-hint">Скажи "П'ятниця, запам'ятай ..." — і це діятиме в усіх чатах</p>
     <div id="memoryList"></div>
   </div>
-  <div class="sidebar-section">
-    <h3>Галерея</h3>
+  <div class="sidebar-section collapsed" id="gallerySection">
+    <h3 class="collapsible" id="galleryToggle">Галерея</h3>
     <p class="sidebar-hint">Скажи "П'ятниця, намалюй ..." — зображення збережуться тут</p>
     <div id="galleryGrid" class="gallery-grid"></div>
   </div>
@@ -661,7 +683,12 @@ function renderMemoryList(){
     const del = document.createElement('div');
     del.className = 'memory-del';
     del.textContent = '✕';
-    del.addEventListener('click', () => removeMemory(i));
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if(confirm('Видалити цей запис з пам\'яті?\n\n«' + fact + '»\n\nДію не можна скасувати.')){
+        removeMemory(i);
+      }
+    });
     row.appendChild(text);
     row.appendChild(del);
     memoryListEl.appendChild(row);
@@ -774,7 +801,9 @@ async function renderGallery(){
     del.textContent = '✕';
     del.addEventListener('click', (e) => {
       e.stopPropagation();
-      deleteGalleryImage(img.id);
+      if(confirm('Видалити це зображення назавжди? Дію не можна скасувати.')){
+        deleteGalleryImage(img.id);
+      }
     });
     item.appendChild(thumb);
     item.appendChild(del);
@@ -810,21 +839,37 @@ function addImageMsg(dataUrl, caption){
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
+// Генерація зображень через Puter.js (модель Flux Schnell) — безкоштовно,
+// без API-ключів, без жорстких лімітів швидкості. Якщо захочеш якість вища
+// (повільніше і при першому запуску Puter може попросити безкоштовний вхід
+// без картки) — заміни "flux-1-schnell" на "dall-e-3" або "gpt-image-1".
+const PUTER_IMAGE_MODEL = "flux-1-schnell";
+
 async function generateImage(prompt){
   const thinkingDiv = addMsg('model', 'Малюю...');
   try{
-    const seed = Math.floor(Math.random() * 1000000);
-    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=768&nologo=true&seed=${seed}`;
+    if(!window.puter || !window.puter.ai || !window.puter.ai.txt2img){
+      throw new Error("бібліотека Puter ще не завантажилась — перевір інтернет і спробуй ще раз за кілька секунд");
+    }
 
-    const res = await fetch(url);
-    if(!res.ok) throw new Error("сервер зображень повернув помилку " + res.status);
+    const imgEl = await puter.ai.txt2img(prompt, { model: PUTER_IMAGE_MODEL });
 
-    const blob = await res.blob();
     const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
+      const toDataUrl = () => {
+        try{
+          const canvas = document.createElement('canvas');
+          canvas.width = imgEl.naturalWidth || 768;
+          canvas.height = imgEl.naturalHeight || 768;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(imgEl, 0, 0);
+          resolve(canvas.toDataURL('image/png'));
+        }catch(e){ reject(e); }
+      };
+      if(imgEl.complete && imgEl.naturalWidth > 0) toDataUrl();
+      else{
+        imgEl.onload = toDataUrl;
+        imgEl.onerror = () => reject(new Error("не вдалося завантажити готове зображення"));
+      }
     });
 
     thinkingDiv.remove();
@@ -834,7 +879,7 @@ async function generateImage(prompt){
     history.push({ role: "model", parts: [{ text: "Згенерувала зображення за твоїм описом." }] });
     persistCurrentChat();
   }catch(err){
-    thinkingDiv.textContent = "Не вдалося згенерувати зображення: " + err.message;
+    thinkingDiv.textContent = "Не вдалося згенерувати зображення: " + (err.message || err);
   }
 }
 
@@ -849,6 +894,13 @@ function closeSidebar(){
 }
 menuBtn.addEventListener('click', openSidebar);
 sidebarOverlay.addEventListener('click', closeSidebar);
+
+document.getElementById('memoryToggle').addEventListener('click', () => {
+  document.getElementById('memorySection').classList.toggle('collapsed');
+});
+document.getElementById('galleryToggle').addEventListener('click', () => {
+  document.getElementById('gallerySection').classList.toggle('collapsed');
+});
 newChatBtn.addEventListener('click', () => switchChat(createChat()));
 
 // ---- Етап 2: локація й погода ----
@@ -881,13 +933,13 @@ function getLocation(){
         resolve(lastCoords);
       },
       (err) => reject(err),
-      { timeout: 10000, maximumAge: 15 * 60 * 1000 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 15 * 60 * 1000 }
     );
   });
 }
 
 async function fetchWeather(lat, lon){
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&timezone=auto`;
   const res = await fetch(url);
   const data = await res.json();
   const cw = data.current_weather;
