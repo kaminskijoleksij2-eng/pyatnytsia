@@ -235,6 +235,11 @@
     display:flex;align-items:center;justify-content:center;
     cursor:pointer;
   }
+  .voice-avatar-btn{
+    background-size:cover;
+    background-position:center 20%;
+    border:2px solid var(--accent);
+  }
   button.round.mic.on{
     background:var(--accent);
     color:#1a1206;
@@ -479,6 +484,7 @@
     color:var(--text);
     border:1px solid var(--line);
     font-size:16px;
+  }
   /* ==== Голосовий режим з анімованим обличчям ==== */
   .voice-overlay{
     position:fixed; inset:0;
@@ -638,7 +644,7 @@
   </div>
   <div class="headtext">
     <h1>П'ятниця</h1>
-    <p id="statusLine">торкнись мікрофона або пиши текстом</p>
+    <p id="statusLine">пиши текстом або відкрий голосовий чат 🎧</p>
   </div>
   <select id="voiceSelect" title="Голос П'ятниці"></select>
 </header>
@@ -695,11 +701,9 @@
 
 <main id="chat"></main>
 
-<div class="hint" id="hint">Спробуй: "П'ятниця, яка зараз погода" або "П'ятниця, коли захід сонця"</div>
 
 <footer>
-  <button class="round" id="voiceModeBtn" title="Голосовий чат">🎧</button>
-  <button class="round mic" id="micBtn" title="Голос">🎙️</button>
+  <button class="round voice-avatar-btn" id="voiceModeBtn" title="Голосовий чат" style="background-image:url('assets/friday-speak.jpg')"></button>
   <textarea id="input" rows="1" placeholder="Напиши повідомлення..."></textarea>
   <button class="round send" id="sendBtn" title="Надіслати">➤</button>
 </footer>
@@ -707,7 +711,6 @@
 <script>
 const ENDPOINT = "https://pyatnytsia-proxy-bc33.kaminskijoleksij2.workers.dev";
 
-const WAKE_WORDS = ["п'ятниц", "пятниц", "п’ятниц"];
 
 const SYSTEM_PROMPT_BASE = `Ти — П'ятниця, персональний ШІ-асистент українця на ім'я Олексій.
 Говори виключно українською мовою, у жіночому граматичному роді (як асистентка), природно і по-людськи, без зайвої формальності.
@@ -722,11 +725,9 @@ const SYSTEM_PROMPT_FLIRT = `Зараз увімкнено режим флірт
 const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
-const micBtn = document.getElementById('micBtn');
 const orb = document.getElementById('holo');
 const voiceSelect = document.getElementById('voiceSelect');
 const statusLine = document.getElementById('statusLine');
-const hint = document.getElementById('hint');
 const menuBtn = document.getElementById('menuBtn');
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -1381,129 +1382,9 @@ function speak(text){
   window.speechSynthesis.speak(utter);
 }
 
-// ---- Голос: вхід (розпізнавання + wake word) ----
+// ---- Розпізнавання голосу (використовується лише в голосовому режимі) ----
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let listening = false;
-let manualMode = false; // true = одноразове натискання мікрофона (без wake word)
 
-function normalize(s){
-  return s.toLowerCase().replace(/['’ʼ]/g, '');
-}
-
-function extractCommand(transcript){
-  const norm = normalize(transcript);
-  for(const w of WAKE_WORDS){
-    const nw = normalize(w);
-    const idx = norm.indexOf(nw);
-    if(idx !== -1){
-      // знаходимо позицію в оригінальному тексті приблизно за довжиною
-      const cutPoint = idx + nw.length;
-      // простий підхід: ріжемо оригінальний рядок по співвідношенню довжини
-      const ratio = cutPoint / norm.length;
-      const rawCut = Math.round(transcript.length * ratio);
-      let rest = transcript.slice(rawCut).replace(/^[,.\s-]+/, '').trim();
-      return rest;
-    }
-  }
-  return null;
-}
-
-function setupRecognition(){
-  if(!SpeechRecognition){
-    statusLine.textContent = 'цей браузер не підтримує розпізнавання голосу';
-    micBtn.disabled = true;
-    return;
-  }
-  recognition = new SpeechRecognition();
-  recognition.lang = 'uk-UA';
-  recognition.continuous = true;
-  recognition.interimResults = false;
-
-  recognition.onresult = (event) => {
-    const last = event.results[event.results.length - 1];
-    const transcript = last[0].transcript.trim();
-    if(!transcript) return;
-
-    if(manualMode){
-      handleUserMessage(transcript);
-      stopListening();
-      return;
-    }
-
-    const command = extractCommand(transcript);
-    if(command !== null){
-      if(command.length > 0){
-        handleUserMessage(command);
-      } else {
-        addSystem('слухаю...');
-      }
-    }
-  };
-
-  recognition.onerror = (e) => {
-    if(e.error === 'no-speech' || e.error === 'aborted') return;
-    statusLine.textContent = 'помилка мікрофона: ' + e.error;
-  };
-
-  recognition.onend = () => {
-    if(listening && !manualMode){
-      // автоперезапуск для постійного прослуховування wake word
-      try{ recognition.start(); }catch(_e){}
-    } else if(manualMode){
-      manualMode = false;
-      listening = false;
-      orb.classList.remove('listening');
-      micBtn.classList.remove('on');
-      statusLine.textContent = "торкнись мікрофона або пиши текстом";
-    }
-  };
-}
-
-function startWakeListening(){
-  listening = true;
-  manualMode = false;
-  orb.classList.add('listening');
-  micBtn.classList.add('on');
-  statusLine.textContent = 'слухаю фонове слово "П\'ятниця"...';
-  hint.style.display = 'none';
-  try{ recognition.start(); }catch(_e){}
-}
-
-function stopListening(){
-  listening = false;
-  orb.classList.remove('listening');
-  micBtn.classList.remove('on');
-  statusLine.textContent = "торкнись мікрофона або пиши текстом";
-  try{ recognition.stop(); }catch(_e){}
-}
-
-micBtn.addEventListener('click', () => {
-  if(!recognition) return;
-  if(listening){
-    stopListening();
-  }else{
-    startWakeListening();
-  }
-});
-
-// довге натискання мікрофона = разова команда без wake word (запасний варіант)
-let pressTimer = null;
-micBtn.addEventListener('touchstart', () => {
-  pressTimer = setTimeout(() => {
-    if(!listening){
-      manualMode = true;
-      listening = true;
-      orb.classList.add('listening');
-      micBtn.classList.add('on');
-      statusLine.textContent = 'кажи зараз...';
-      try{ recognition.start(); }catch(_e){}
-    }
-  }, 500);
-});
-micBtn.addEventListener('touchend', () => clearTimeout(pressTimer));
-
-setupRecognition();
 initChats();
 renderMemoryList();
 renderGallery();
@@ -1644,61 +1525,87 @@ async function speakPremium(text){
   }finally{
     currentVoiceAudio = null;
     if(voiceModeOn){
-      setFaceState('listening');
-      voiceStatus.textContent = 'слухаю...';
-      startVoiceListening();
+      setFaceState('idle');
+      voiceStatus.textContent = 'Натисни мікрофон, щоб говорити';
     }
   }
 }
+
+// voiceListening = мікрофон увімкнений (вона чує); stoppingIntentionally =
+// користувач сам вимкнув мікрофон (а не стався випадковий тайм-аут тиші) —
+// лише тоді беремо накопичену фразу і відповідаємо.
+let voiceListening = false;
+let stoppingIntentionally = false;
+let voiceBuffer = [];
 
 function setupVoiceRecognition(){
   if(!SpeechRecognition) return;
   voiceRecognition = new SpeechRecognition();
   voiceRecognition.lang = 'uk-UA';
-  voiceRecognition.continuous = false;
+  voiceRecognition.continuous = true;
   voiceRecognition.interimResults = false;
 
   voiceRecognition.onresult = (event) => {
-    const transcript = event.results[event.results.length - 1][0].transcript.trim();
-    if(!transcript) return;
-    voiceTranscript.textContent = transcript;
-    voiceMicBtn.classList.remove('listening-active');
-    voiceStatus.textContent = 'думаю...';
-    setFaceState('idle');
-    handleUserMessage(transcript);
+    for(let i = event.resultIndex; i < event.results.length; i++){
+      const res = event.results[i];
+      if(res.isFinal){
+        const t = res[0].transcript.trim();
+        if(t){
+          voiceBuffer.push(t);
+          voiceTranscript.textContent = voiceBuffer.join(' ');
+        }
+      }
+    }
   };
   voiceRecognition.onerror = (e) => {
-    voiceMicBtn.classList.remove('listening-active');
-    if(e.error === 'no-speech' || e.error === 'aborted'){
-      if(voiceModeOn){ voiceStatus.textContent = 'не почула — натисни мікрофон ще раз'; }
-      return;
-    }
+    if(e.error === 'no-speech' || e.error === 'aborted') return;
     voiceStatus.textContent = 'помилка мікрофона: ' + e.error;
   };
   voiceRecognition.onend = () => {
+    if(voiceListening && !stoppingIntentionally){
+      // випадкове переривання (тиша/тайм-аут браузера) — мікрофон усе ще
+      // має бути увімкнений, бо користувач його сам не вимикав
+      try{ voiceRecognition.start(); }catch(_e){}
+      return;
+    }
+    stoppingIntentionally = false;
     voiceMicBtn.classList.remove('listening-active');
+    const finalText = voiceBuffer.join(' ').trim();
+    voiceBuffer = [];
+    if(finalText){
+      voiceStatus.textContent = 'думаю...';
+      setFaceState('idle');
+      handleUserMessage(finalText);
+    } else if(voiceModeOn){
+      voiceStatus.textContent = 'Натисни мікрофон, щоб говорити';
+      setFaceState('idle');
+    }
   };
 }
 
-function startVoiceListening(){
+function turnMicOn(){
   if(!voiceRecognition) setupVoiceRecognition();
   if(!voiceRecognition) return;
-  setFaceState('listening');
-  voiceStatus.textContent = 'слухаю...';
+  voiceListening = true;
+  voiceBuffer = [];
+  voiceTranscript.textContent = '';
   voiceMicBtn.classList.add('listening-active');
+  setFaceState('listening');
+  voiceStatus.textContent = 'слухаю... натисни ще раз, щоб я відповіла';
   try{ voiceRecognition.start(); }catch(_e){}
 }
 
-function stopVoiceRecognition(){
-  if(voiceRecognition){ try{ voiceRecognition.stop(); }catch(_e){} }
-  voiceMicBtn.classList.remove('listening-active');
+function turnMicOff(){
+  voiceListening = false;
+  stoppingIntentionally = true;
+  try{ voiceRecognition.stop(); }catch(_e){}
 }
 
 function openVoiceMode(){
   voiceModeOn = true;
   voiceOverlay.classList.add('open');
   setFaceState('idle');
-  voiceStatus.textContent = 'Торкнись мікрофона, щоб почати розмову';
+  voiceStatus.textContent = 'Натисни мікрофон, щоб говорити';
   voiceTranscript.textContent = '';
   scheduleBlink();
 }
@@ -1707,7 +1614,11 @@ function closeVoiceMode(){
   voiceModeOn = false;
   voiceOverlay.classList.remove('open');
   stopBlinking();
-  stopVoiceRecognition();
+  voiceListening = false;
+  stoppingIntentionally = true;
+  if(voiceRecognition){ try{ voiceRecognition.stop(); }catch(_e){} }
+  voiceMicBtn.classList.remove('listening-active');
+  voiceBuffer = [];
   if(window.speechSynthesis) window.speechSynthesis.cancel();
   if(currentVoiceAudio){
     try{ currentVoiceAudio.pause(); }catch(_e){}
@@ -1722,7 +1633,7 @@ voiceMicBtn.addEventListener('click', () => {
   if(!voiceAudioCtx){
     try{ voiceAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(_e){}
   }
-  startVoiceListening();
+  if(voiceListening) turnMicOff(); else turnMicOn();
 });
 
 
