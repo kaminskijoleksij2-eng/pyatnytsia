@@ -1436,44 +1436,18 @@ function stopBlinking(){
   blinkTimer = null;
 }
 
-function applyMouth(amount){
-  const scale = 1 + Math.min(amount, 1) * 1.3;
-  mouthImg.style.transform = `scaleY(${scale})`;
-  mouthShadow.style.opacity = Math.min(amount * 1.7, 0.6);
-}
-
-// Аналіз гучності аудіо в реальному часі → рух рота (псевдо-липсинк)
+// Просто відтворюємо голос без руху рота — лише перехід між зображеннями
+// (слухає/говорить) лишається.
 function playWithLipSync(audio){
   return new Promise((resolve) => {
     try{
-      if(!voiceAudioCtx) voiceAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = voiceAudioCtx.createMediaElementSource(audio);
-      const analyser = voiceAudioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      analyser.connect(voiceAudioCtx.destination);
-      const data = new Uint8Array(analyser.frequencyBinCount);
-
-      function tick(){
-        analyser.getByteFrequencyData(data);
-        let sum = 0;
-        for(let i = 0; i < data.length; i++) sum += data[i];
-        applyMouth((sum / data.length) / 255);
-        voiceAnimFrame = requestAnimationFrame(tick);
-      }
-      tick();
-
-      const finish = () => {
-        cancelAnimationFrame(voiceAnimFrame);
-        applyMouth(0);
-        resolve();
-      };
+      const finish = () => resolve();
       audio.onended = finish;
       audio.onerror = finish;
       currentVoiceAudio = audio;
       audio.play().catch(finish);
     }catch(e){
-      console.error('lip-sync помилка:', e);
+      console.error('помилка відтворення:', e);
       currentVoiceAudio = audio;
       audio.onended = resolve;
       audio.onerror = resolve;
@@ -1492,13 +1466,7 @@ function speakFallbackSystem(text){
     utter.lang = 'uk-UA';
     const ukVoice = availableVoices.find(v => v.lang && v.lang.toLowerCase().startsWith('uk'));
     if(ukVoice) utter.voice = ukVoice;
-    mouthWindow.classList.add('auto-talk');
-    mouthShadow.style.opacity = 0.35;
-    const finish = () => {
-      mouthWindow.classList.remove('auto-talk');
-      mouthShadow.style.opacity = 0;
-      resolve();
-    };
+    const finish = () => resolve();
     utter.onend = finish;
     utter.onerror = finish;
     window.speechSynthesis.speak(utter);
@@ -1607,13 +1575,11 @@ function openVoiceMode(){
   setFaceState('idle');
   voiceStatus.textContent = 'Натисни мікрофон, щоб говорити';
   voiceTranscript.textContent = '';
-  scheduleBlink();
 }
 
 function closeVoiceMode(){
   voiceModeOn = false;
   voiceOverlay.classList.remove('open');
-  stopBlinking();
   voiceListening = false;
   stoppingIntentionally = true;
   if(voiceRecognition){ try{ voiceRecognition.stop(); }catch(_e){} }
